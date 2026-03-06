@@ -8,12 +8,12 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 from konlpy.tag import Okt
 from langchain_classic.retrievers import EnsembleRetriever
-from langchain_classic.schema import Document 
+from langchain_classic.schema import Document
 from langchain_community.retrievers import BM25Retriever
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 
-from ..constants.constants import (
+from .config import (
     DOCUMENT_JSON_PATH,
     EMBEDDING_MODEL_PATH,
     ENSEMBLE_WEIGHTS,
@@ -61,7 +61,11 @@ ensemble_retriever = EnsembleRetriever(
     weights=ENSEMBLE_WEIGHTS,
     search_kwargs={"k": TOP_K_RETRIEVAL},
 )
-logger.info("Ensemble retriever initialized (weights=%s, k=%d)", ENSEMBLE_WEIGHTS, TOP_K_RETRIEVAL)
+logger.info(
+    "Ensemble retriever initialized (weights=%s, k=%d)",
+    ENSEMBLE_WEIGHTS,
+    TOP_K_RETRIEVAL,
+)
 
 
 def fix_image_paths(text: str) -> str:
@@ -69,14 +73,28 @@ def fix_image_paths(text: str) -> str:
     return text.replace(IMAGE_PATH_OLD_PREFIX, IMAGE_PATH_NEW_PREFIX)
 
 
-def retrieve_documents(query: str) -> list[dict]:
+def retrieve_documents(query: str, top_k: int | None = None) -> list[dict]:
+    k = top_k or TOP_K_RETRIEVAL
 
-    docs = ensemble_retriever.invoke(query)
+    # Temporarily override k if different from default
+    if k != TOP_K_RETRIEVAL:
+        sparse_retriever.k = k
+        dense_retriever.search_kwargs["k"] = k
+        ensemble_retriever.search_kwargs["k"] = k
+
+    try:
+        docs = ensemble_retriever.invoke(query)
+    finally:
+        # Restore defaults
+        if k != TOP_K_RETRIEVAL:
+            sparse_retriever.k = TOP_K_RETRIEVAL
+            dense_retriever.search_kwargs["k"] = TOP_K_RETRIEVAL
+            ensemble_retriever.search_kwargs["k"] = TOP_K_RETRIEVAL
+
     results = []
     for doc in docs:
         content = fix_image_paths(doc.page_content)
         metadata = doc.metadata.copy()
-        # Fix image paths in metadata values
         for key, val in metadata.items():
             if isinstance(val, str):
                 metadata[key] = fix_image_paths(val)
@@ -95,4 +113,3 @@ def retrieve_documents(query: str) -> list[dict]:
         )
     logger.debug("Retrieved %d documents for query: %s", len(results), query[:80])
     return results
-    

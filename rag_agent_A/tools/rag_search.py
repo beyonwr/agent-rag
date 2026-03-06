@@ -2,13 +2,29 @@ import logging
 import mimetypes
 import os
 
-from google.adk.tools import ToolContext 
+import httpx
+from google.adk.tools import ToolContext
 from google.genai import types
 
-from ..constants.constants import RAG_LAST_SEARCH_QUERY, RAG_LAST_SEARCH_RESULTS
-from ..utils.retriever_utils import retrieve_documents
+from ..constants.constants import (
+    RAG_API_BASE_URL,
+    RAG_LAST_SEARCH_QUERY,
+    RAG_LAST_SEARCH_RESULTS,
+)
 
 logger = logging.getLogger(__name__)
+
+
+async def _call_rag_api(query: str, top_k: int | None = None) -> dict:
+    """Call the external RAG API /search endpoint."""
+    payload: dict = {"query": query}
+    if top_k is not None:
+        payload["top_k"] = top_k
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(f"{RAG_API_BASE_URL}/search", json=payload)
+        resp.raise_for_status()
+        return resp.json()
 
 
 async def _save_image_artifacts(
@@ -47,7 +63,16 @@ async def _save_image_artifacts(
 async def search_tech_reports(query: str, tool_context: ToolContext) -> dict:
 
     try:
-        results = retrieve_documents(query)
+        api_response = await _call_rag_api(query)
+
+        if api_response.get("status") == "error":
+            return {
+                "status": "error",
+                "message": api_response.get("message", "RAG API 오류"),
+                "data": [],
+            }
+
+        results = api_response.get("results", [])
 
         # Save to session state for multi-turn context
         tool_context.state[RAG_LAST_SEARCH_QUERY] = query
@@ -68,6 +93,13 @@ async def search_tech_reports(query: str, tool_context: ToolContext) -> dict:
             "message": f"'{query}'에 대해 {len(results)}건의 문서를 검색했습니다.",
             "data": results,
             "saved_artifacts": saved_artifacts,
+        }
+    except httpx.HTTPStatusError as e:
+        logger.exception("RAG API HTTP error for query: %s", query)
+        return {
+            "status": "error",
+            "message": f"RAG API 호출 실패 (HTTP {e.response.status_code})",
+            "data": [],
         }
     except Exception as e:
         logger.exception("Error in search_tech_reports for query: %s", query)
