@@ -69,12 +69,12 @@ async def search_tech_reports(query: str, tool_context: ToolContext) -> dict:
             return {
                 "status": "error",
                 "outputs": {
-                    "message": api_response.get("message", "RAG API 오류"),
+                    "message": api_response.get("outputs", {}).get("message", "RAG API 오류"),
                     "data": [],
                 },
             }
 
-        results = api_response.get("results", [])
+        results = api_response.get("outputs", {}).get("results", [])
 
         # Save to session state for multi-turn context
         tool_context.state[RAG_LAST_SEARCH_QUERY] = query

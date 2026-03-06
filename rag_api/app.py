@@ -22,16 +22,20 @@ async def search(body: SearchRequest):
         results = retrieve_documents(body.query, top_k=body.top_k)
         return {
             "status": "success",
-            "query": body.query,
-            "total": len(results),
-            "results": results,
+            "outputs": {
+                "query": body.query,
+                "total": len(results),
+                "results": results,
+            },
         }
     except Exception as e:
         logger.exception("Search failed for query: %s", body.query)
         return {
             "status": "error",
-            "message": str(e),
-            "results": [],
+            "outputs": {
+                "message": str(e),
+                "results": [],
+            },
         }
 
 
