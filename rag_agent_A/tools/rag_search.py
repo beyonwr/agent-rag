@@ -1,6 +1,6 @@
+import base64
 import logging
-import mimetypes
-import os
+import re
 
 import httpx
 from google.adk.tools import ToolContext
@@ -8,6 +8,7 @@ from google.genai import types
 
 from ..constants.constants import (
     RAG_API_BASE_URL,
+    RAG_API_USER,
     RAG_LAST_SEARCH_QUERY,
     RAG_LAST_SEARCH_RESULTS,
 )
@@ -15,14 +16,14 @@ from ..constants.constants import (
 logger = logging.getLogger(__name__)
 
 
-async def _call_rag_api(query: str, top_k: int | None = None) -> dict:
-    """Call the external RAG API /search endpoint."""
-    payload: dict = {"query": query}
-    if top_k is not None:
-        payload["top_k"] = top_k
+async def _call_rag_api(query: str) -> dict:
+    """Call the external RAG API /retrieve/techreport endpoint."""
+    payload: dict = {"query": query, "user": RAG_API_USER}
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(f"{RAG_API_BASE_URL}/search", json=payload)
+        resp = await client.post(
+            f"{RAG_API_BASE_URL}/retrieve/techreport", json=payload
+        )
         resp.raise_for_status()
         return resp.json()
 
@@ -35,25 +36,23 @@ async def _save_image_artifacts(
     seen = set()
 
     for result in results:
-        for img_path in result.get("metadata", {}).get("image", []):
-            if img_path in seen or not os.path.isfile(img_path):
+        metadata = result.get("metadata", {})
+        title = metadata.get("title", "unknown")
+        # 파일명에 사용할 수 없는 문자 제거
+        safe_title = re.sub(r'[^\w\-.]', '_', title)
+
+        for idx, b64_str in enumerate(metadata.get("image", [])):
+            key = f"{title}_{idx}"
+            if key in seen:
                 continue
-            seen.add(img_path)
+            seen.add(key)
 
-            with open(img_path, "rb") as f:
-                data = f.read()
-
-            mime_type = mimetypes.guess_type(img_path)[0] or "image/png"
+            data = base64.b64decode(b64_str)
             artifact = types.Part(
-                inline_data=types.Blob(mime_type=mime_type, data=data)
+                inline_data=types.Blob(mime_type="image/png", data=data)
             )
 
-            # 고유 파일명: 보고서ID_이미지명.png
-            report_id = os.path.basename(
-                os.path.dirname(os.path.dirname(img_path))
-            )
-            filename = f"{report_id}_{os.path.basename(img_path)}"
-
+            filename = f"{safe_title}_{idx}.png"
             await tool_context.save_artifact(filename=filename, artifact=artifact)
             saved.append(filename)
 
@@ -69,12 +68,12 @@ async def search_tech_reports(query: str, tool_context: ToolContext) -> dict:
             return {
                 "status": "error",
                 "outputs": {
-                    "message": api_response.get("outputs", {}).get("message", "RAG API 오류"),
+                    "message": "RAG API 오류",
                     "data": [],
                 },
             }
 
-        results = api_response.get("outputs", {}).get("results", [])
+        results = api_response.get("outputs", [])
 
         # Save to session state for multi-turn context
         tool_context.state[RAG_LAST_SEARCH_QUERY] = query
